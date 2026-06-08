@@ -4,27 +4,32 @@ An async job processing REST API built in Go. This service accepts job registrat
 
 ## Architecture
 
-```
-┌──────────┐     ┌──────────┐     ┌─────────────────┐
-│  Client  │────▶│  API     │────▶│  PostgreSQL     │
-│ (curl /  │     │ (:8000)  │     │  (jobs, users,  │
-│  HTTPie) │     │          │     │   outbox, keys) │
-└──────────┘     └────┬─────┘     └─────────────────┘
-                      │                      ▲
-                      │ writes outbox event  │
-                      ▼                      │
-               ┌──────────┐     ┌────────────┴────┐
-               │  Worker  │◀────│  Redis (Asynq)  │
-               │ (:asynq) │     │  task queue      │
-               └────┬─────┘     └─────────────────┘
-                    │
-                    │ POSTs job payload
-                    ▼
-            ┌──────────────┐
-            │  Webhook     │
-            │  Receiver    │
-            │  (:9000)     │
-            └──────────────┘
+```mermaid
+flowchart TB
+    Client["Client<br/>(curl / HTTPie)"]
+
+    subgraph API_LAYER ["API Layer"]
+        API["API<br/>(port 8000)"]
+        Nginx["Nginx<br/>(port 80)"]
+        Nginx --> API
+    end
+
+    subgraph STORAGE ["Storage"]
+        PG[("PostgreSQL<br/>(jobs, users,<br/>outbox, keys)")]
+        Redis[("Redis / Asynq<br/>(task queue)")]
+    end
+
+    subgraph WORKER ["Worker"]
+        W["Asynq Worker"]
+    end
+
+    WH["Webhook Receiver<br/>(port 9000)"]
+
+    Client --> Nginx
+    API -- writes outbox event --> PG
+    W -- polls outbox --> PG
+    W <--> Redis
+    W -- POSTs job payload --> WH
 ```
 
 ### Components
@@ -33,7 +38,7 @@ An async job processing REST API built in Go. This service accepts job registrat
 |---|---|---|
 | **API** | `:8000` | REST API — register/login users, CRUD jobs |
 | **Worker** | — | Asynq worker that polls the outbox and executes job webhooks |
-| **Webhook** | `:9000` | Echo receiver for testing (`POST /echo` → returns `"ok"`) |
+| **Webhook** | `:9000` | Echo receiver for testing (`POST /echo` returns `"ok"`) |
 | **PostgreSQL** | `:5432` | Primary data store — users, jobs, idempotency keys, outbox |
 | **Redis** | `:6379` | Asynq task queue and result backend |
 | **Nginx** | `:80` | Reverse proxy to the API |
@@ -64,55 +69,41 @@ Tokens are **HMAC-SHA256 JWTs** signed with the `JWT_SECRET` env var.
 
 ## Flow
 
-```
-  Client                  API                  DB/Outbox           Worker            Webhook
-    │                      │                      │                  │                 │
-    │  POST /register      │                      │                  │                 │
-    │─────────────────────▶│  INSERT users         │                  │                 │
-    │  ◀───────────────────│  return tokens        │                  │                 │
-    │                      │                      │                  │                 │
-    │  POST /jobs          │                      │                  │                 │
-    │  (Bearer token)      │                      │                  │                 │
-    │─────────────────────▶│                      │                  │                 │
-    │                      │ 1. canonical JSON    │                  │                 │
-    │                      │    → SHA256 hash      │                  │                 │
-    │                      │                      │                  │                 │
-    │                      │ 2. INSERT jobs       │                  │                 │
-    │                      │    (state=pending)   │                  │                 │
-    │                      │                      │                  │                 │
-    │                      │ 3. INSERT idempotency│                  │                 │
-    │                      │    _keys             │                  │                 │
-    │                      │                      │                  │                 │
-    │                      │ 4. INSERT outbox     │                  │                 │
-    │                      │    (event=job_created)│                  │                 │
-    │                      │                      │                  │                 │
-    │  ◀───────────────────│  return job_id       │                  │                 │
-    │                      │                      │                  │                 │
-    │                      │                      │  poll outbox     │                 │
-    │                      │                      │◀─────────────────│                 │
-    │                      │                      │  mark published  │                 │
-    │                      │                      │─────────────────▶│                 │
-    │                      │                      │                  │                 │
-    │                      │                      │                  │ enqueue asynq    │
-    │                      │                      │                  │ task             │
-    │                      │                      │                  │──┐              │
-    │                      │                      │                  │  │ (execute)    │
-    │                      │                      │                  │◀─┘              │
-    │                      │                      │                  │                 │
-    │                      │                      │  UPDATE jobs     │  POST /echo     │
-    │                      │                      │  (state=running) │────────────────▶│
-    │                      │                      │◀─────────────────│                 │
-    │                      │                      │                  │  "ok"           │
-    │                      │                      │                  │◀────────────────│
-    │                      │                      │                  │                 │
-    │                      │                      │  UPDATE jobs     │                 │
-    │                      │                      │  (state=complete)│                 │
-    │                      │                      │◀─────────────────│                 │
-    │                      │                      │                  │                 │
-    │  GET /jobs/{id}      │                      │                  │                 │
-    │─────────────────────▶│                      │                  │                 │
-    │  ◀───────────────────│  state=completed     │                  │                 │
-    │                      │                      │                  │                 │
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant API as API
+    participant PG as PostgreSQL
+    participant W as Worker
+    participant WH as Webhook
+
+    C->>+API: POST /register {email, password}
+    API->>PG: INSERT users
+    PG-->>API: user_id
+    API-->>-C: {access_token, refresh_token}
+
+    C->>+API: POST /jobs (Bearer token) {type, name, webhook_url}
+    API->>API: canonical JSON -> SHA256 hash
+    API->>PG: INSERT jobs (state=pending)
+    API->>PG: INSERT idempotency_keys
+    API->>PG: INSERT outbox (job_created)
+    API-->>-C: {job_id, state}
+
+    loop Poll every 5s
+        W->>PG: SELECT outbox FOR UPDATE SKIP LOCKED
+        PG-->>W: unpublished event
+        W->>PG: UPDATE outbox SET published=true
+        W->>Redis: enqueue asynq task
+    end
+
+    W->>PG: UPDATE jobs SET state=running
+    W->>+WH: POST /echo {payload}
+    WH-->>-W: 200 "ok"
+    W->>PG: UPDATE jobs SET state=completed
+
+    C->>+API: GET /jobs/{id} (Bearer token)
+    API-->>-C: {state: completed, result: ...}
 ```
 
 ### Key points
@@ -142,7 +133,6 @@ Tokens are **HMAC-SHA256 JWTs** signed with the `JWT_SECRET` env var.
 | **No webhook retry backoff** | Retries fire immediately on next poll cycle (~5s). Could flood a down webhook. | Implement exponential backoff (e.g. `min(pow(2, attempt), 3600)` seconds delay). |
 | **No webhook signature / HMAC** | Webhook receivers can't verify the request came from this service. | Sign the payload with a shared secret (e.g. `X-Signature: sha256(secret+body)`). |
 | **In-memory swagger docs** | The `docs/` package is generated at build time and must be re-generated after handler changes. | Add `//go:generate swag init` to the Makefile. |
-| **Keycloak keys cached 15 min** | New keys from Keycloak won't be picked up for up to 15 minutes. | Shorten cache TTL or listen for Keycloak `JWKSUpdated` events. |
 | **Idempotency keys never cleaned** | Keys expire at DB level after 24h but no background cleanup of expired rows. | Add a cron or periodic DELETE of `expires_at < now()`. |
 
 ## Running
@@ -158,7 +148,7 @@ Tokens are **HMAC-SHA256 JWTs** signed with the `JWT_SECRET` env var.
 docker compose up -d
 ```
 
-This starts all services: PostgreSQL, Redis, Keycloak, webhook receiver, API, and worker. The API is available at `http://localhost:8000`.
+This starts all services: PostgreSQL, Redis, webhook receiver, API, and worker. The API is available at `http://localhost:8000`.
 
 ### Verify it's running
 
@@ -173,7 +163,6 @@ curl http://localhost:8000/health
 |---|---|---|---|
 | `DATABASE_URL` | Yes | — | Postgres connection string |
 | `JWT_SECRET` | Yes | — | HMAC-SHA256 signing key |
-
 | `PORT` | No | `8000` | HTTP listen port |
 
 The `docker-compose.yml` sets these automatically for development.
@@ -196,9 +185,9 @@ See `test-commands.http` (HTTPie) or `test-commands.sh` in the repo root for a c
 
 ### Test flow
 
-1. **Health check**: `GET /health` → `200 OK`
-2. **Register**: `POST /register` with email + password → `201` + tokens
-3. **Create job**: `POST /jobs` with type, name, webhook_url → `202` + `job_id`
+1. **Health check**: `GET /health` -> `200 OK`
+2. **Register**: `POST /register` with email + password -> `201` + tokens
+3. **Create job**: `POST /jobs` with type, name, webhook_url -> `202` + `job_id`
 4. **Check status**: Poll `GET /jobs/{job_id}` until `state` is `completed`
 5. **Verify webhook**: Check webhook container logs for the received payload
 
