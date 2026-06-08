@@ -1,6 +1,22 @@
 # Assignment
 
-An async job processing REST API built in Go. This service accepts job registrations, processes them asynchronously via an outbox + Redis-backed task queue, and POSTs job payloads to user-specified webhook URLs.
+An async job processing REST API built in Go.
+
+## Live Demo
+
+The API is deployed and running on DigitalOcean (Bangalore, India):
+
+**http://168.144.156.101:8000**
+
+| Endpoint | URL |
+|---|---|
+| Health | http://168.144.156.101:8000/health |
+| Swagger UI | http://168.144.156.101:8000/swagger/index.html |
+| Register | `POST http://168.144.156.101:8000/register` |
+| Login | `POST http://168.144.156.101:8000/login` |
+| Jobs API | `http://168.144.156.101:8000/jobs` (requires Bearer token) |
+
+ This service accepts job registrations, processes them asynchronously via an outbox + Redis-backed task queue, and POSTs job payloads to user-specified webhook URLs.
 
 ## Architecture
 
