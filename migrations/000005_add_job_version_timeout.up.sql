@@ -1,0 +1,3 @@
+ALTER TABLE jobs
+ADD COLUMN version int NOT NULL DEFAULT 1,
+ADD COLUMN timeout_seconds int NOT NULL DEFAULT 15;

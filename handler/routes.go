@@ -3,6 +3,8 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/Heleo2705/assignment/db"
 	"github.com/Heleo2705/assignment/middleware"
@@ -24,8 +26,16 @@ type registerJobRequest struct {
 	Type           string `json:"type"`
 	Name           string `json:"name"`
 	WebhookURL     string `json:"webhook_url"`
+	Version        *int   `json:"version,omitempty"`
 	MaxRetries     *int   `json:"max_retries,omitempty"`
 	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+}
+
+type updateJobRequest struct {
+	Name           *string `json:"name,omitempty"`
+	WebhookURL     *string `json:"webhook_url,omitempty"`
+	MaxRetries     *int    `json:"max_retries,omitempty"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 }
 
 type jsonResponse struct {
@@ -37,12 +47,13 @@ func New(store *db.Store) *Handler {
 	return &Handler{store: store}
 }
 
-func (h *Handler) RegisterRoutes(r *chi.Mux) {
+func (h *Handler) RegisterRoutes(r *chi.Mux, authMiddleware func(http.Handler) http.Handler) {
 	r.Get("/health", h.healthHandler)
 	r.Post("/register", h.registerHandler)
 	r.Post("/login", h.loginHandler)
 
 	r.Route("/jobs", func(r chi.Router) {
+		r.Use(authMiddleware)
 		r.Post("/", h.createJobHandler)
 		r.Get("/", h.listJobsHandler)
 		r.Get("/{jobID}", h.getJobHandler)
@@ -85,8 +96,22 @@ func (h *Handler) registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	accessToken, err := service.GenerateAccessToken(os.Getenv("JWT_SECRET"), userID, req.Email, 15*time.Minute)
+	if err != nil {
+		logger.Error("failed to generate access token", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to create user"})
+		return
+	}
+
+	refreshToken, err := service.GenerateRefreshToken(os.Getenv("JWT_SECRET"), userID, 7*24*time.Hour)
+	if err != nil {
+		logger.Error("failed to generate refresh token", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to create user"})
+		return
+	}
+
 	logger.Info("user registered", zap.String("user_id", userID), zap.String("email", req.Email))
-	writeJSON(w, http.StatusCreated, jsonResponse{Message: "registration successful", Data: map[string]string{"user_id": userID, "access_token": "TODO_ACCESS_TOKEN", "refresh_token": "TODO_REFRESH_TOKEN"}})
+	writeJSON(w, http.StatusCreated, jsonResponse{Message: "registration successful", Data: map[string]string{"user_id": userID, "access_token": accessToken, "refresh_token": refreshToken}})
 }
 
 func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -115,18 +140,33 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	accessToken, err := service.GenerateAccessToken(os.Getenv("JWT_SECRET"), user.ID, req.Email, 15*time.Minute)
+	if err != nil {
+		logger.Error("failed to generate access token", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to login"})
+		return
+	}
+
+	refreshToken, err := service.GenerateRefreshToken(os.Getenv("JWT_SECRET"), user.ID, 7*24*time.Hour)
+	if err != nil {
+		logger.Error("failed to generate refresh token", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to login"})
+		return
+	}
+
 	logger.Info("login succeeded", zap.String("user_id", user.ID), zap.String("email", req.Email))
-	writeJSON(w, http.StatusOK, jsonResponse{Message: "login successful", Data: map[string]string{"user_id": user.ID, "access_token": "TODO_ACCESS_TOKEN", "refresh_token": "TODO_REFRESH_TOKEN"}})
+	writeJSON(w, http.StatusOK, jsonResponse{Message: "login successful", Data: map[string]string{"user_id": user.ID, "access_token": accessToken, "refresh_token": refreshToken}})
 }
 
 func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		logger.Warn("create job failed: missing user id header")
-		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "missing user id"})
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		logger.Warn("create job failed: missing auth claims")
+		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
 	}
+	userID := claims.Subject
 
 	var req registerJobRequest
 	decoder := json.NewDecoder(r.Body)
@@ -142,7 +182,7 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobPayload := service.NewJobPayload(req.Type, req.Name, req.WebhookURL, req.MaxRetries, req.TimeoutSeconds)
+	jobPayload := service.NewJobPayload(req.Type, req.Name, req.WebhookURL, req.Version, req.MaxRetries, req.TimeoutSeconds)
 	requestHash, err := service.ComputeIdempotencyHash(jobPayload)
 	if err != nil {
 		logger.Error("failed to compute idempotency hash", zap.Error(err))
@@ -157,13 +197,15 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, existing, err := h.store.CreateJobWithIdempotency(r.Context(), userID, requestHash, "POST", "/jobs", db.CreateJobParams{
-		UserID:     userID,
-		Type:       req.Type,
-		Name:       req.Name,
-		WebhookURL: req.WebhookURL,
-		Payload:    payloadBytes,
-		MaxRetries: jobPayload.MaxRetries,
+	job, existing, err := h.store.CreateJobWithIdempotency(r.Context(), userID, requestHash, "POST", "/jobs", db.StoreCreateJobParams{
+		UserID:         userID,
+		Type:           req.Type,
+		Name:           req.Name,
+		WebhookURL:     req.WebhookURL,
+		Payload:        payloadBytes,
+		MaxRetries:     jobPayload.MaxRetries,
+		TimeoutSeconds: jobPayload.TimeoutSeconds,
+		Version:        jobPayload.Version,
 	})
 	if err != nil {
 		logger.Error("failed to create job", zap.Error(err))
@@ -183,29 +225,167 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	logger.Info("list jobs requested")
-	writeJSON(w, http.StatusNotImplemented, jsonResponse{Message: "list jobs endpoint placeholder"})
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		logger.Warn("list jobs failed: missing auth claims")
+		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
+		return
+	}
+
+	jobs, err := h.store.ListJobsByUser(r.Context(), claims.Subject)
+	if err != nil {
+		logger.Error("failed to list jobs", zap.Error(err))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to list jobs"})
+		return
+	}
+
+	response := make([]interface{}, 0, len(jobs))
+	for _, job := range jobs {
+		response = append(response, map[string]interface{}{
+			"id":              job.ID,
+			"type":            job.Type,
+			"name":            job.Name,
+			"webhook_url":     job.WebhookURL,
+			"version":         job.Version,
+			"max_retries":     job.MaxRetries,
+			"timeout_seconds": job.TimeoutSeconds,
+			"state":           job.State,
+			"attempts":        job.Attempts,
+			"scheduled_at":    job.ScheduledAt,
+			"payload":         json.RawMessage(job.Payload),
+			"last_error":      job.LastError.String,
+			"result":          json.RawMessage(job.Result),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, jsonResponse{Message: "jobs listed", Data: response})
 }
 
 func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		logger.Warn("get job failed: missing auth claims")
+		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
+		return
+	}
+
 	jobID := chi.URLParam(r, "jobID")
-	logger.Info("get job requested", zap.String("job_id", jobID))
-	writeJSON(w, http.StatusNotImplemented, jsonResponse{Message: "get job endpoint placeholder", Data: map[string]string{"jobID": jobID}})
+	job, err := h.store.GetJobByID(r.Context(), jobID)
+	if err != nil {
+		logger.Error("failed to fetch job", zap.Error(err), zap.String("job_id", jobID))
+		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
+		return
+	}
+	if job.UserID != claims.Subject {
+		logger.Warn("get job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, jsonResponse{Message: "job fetched", Data: map[string]interface{}{
+		"id":              job.ID,
+		"type":            job.Type,
+		"name":            job.Name,
+		"webhook_url":     job.WebhookURL,
+		"version":         job.Version,
+		"max_retries":     job.MaxRetries,
+		"timeout_seconds": job.TimeoutSeconds,
+		"state":           job.State,
+		"attempts":        job.Attempts,
+		"scheduled_at":    job.ScheduledAt,
+		"payload":         json.RawMessage(job.Payload),
+		"last_error":      job.LastError.String,
+		"result":          json.RawMessage(job.Result),
+	}})
 }
 
 func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		logger.Warn("update job failed: missing auth claims")
+		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
+		return
+	}
+
 	jobID := chi.URLParam(r, "jobID")
-	logger.Info("update job requested", zap.String("job_id", jobID))
-	writeJSON(w, http.StatusNotImplemented, jsonResponse{Message: "update job endpoint placeholder", Data: map[string]string{"jobID": jobID}})
+	var req updateJobRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		logger.Warn("update job failed: invalid request payload", zap.Error(err))
+		writeJSON(w, http.StatusBadRequest, jsonResponse{Message: "invalid request payload"})
+		return
+	}
+	if req.Name == nil && req.WebhookURL == nil && req.MaxRetries == nil && req.TimeoutSeconds == nil {
+		writeJSON(w, http.StatusBadRequest, jsonResponse{Message: "no fields to update"})
+		return
+	}
+
+	job, err := h.store.GetJobByID(r.Context(), jobID)
+	if err != nil {
+		logger.Error("failed to fetch job", zap.Error(err), zap.String("job_id", jobID))
+		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
+		return
+	}
+	if job.UserID != claims.Subject {
+		logger.Warn("update job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
+		return
+	}
+
+	if req.Name != nil {
+		job.Name = *req.Name
+	}
+	if req.WebhookURL != nil {
+		job.WebhookURL = *req.WebhookURL
+	}
+	if req.MaxRetries != nil && *req.MaxRetries > 0 {
+		job.MaxRetries = *req.MaxRetries
+	}
+	if req.TimeoutSeconds != nil && *req.TimeoutSeconds > 0 {
+		job.TimeoutSeconds = *req.TimeoutSeconds
+	}
+
+	if err := h.store.UpdateJobDetails(r.Context(), job.ID, job.UserID, job.Name, job.WebhookURL, job.MaxRetries, job.TimeoutSeconds); err != nil {
+		logger.Error("failed to update job", zap.Error(err), zap.String("job_id", jobID))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to update job"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, jsonResponse{Message: "job updated"})
 }
 
 func (h *Handler) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		logger.Warn("delete job failed: missing auth claims")
+		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
+		return
+	}
+
 	jobID := chi.URLParam(r, "jobID")
-	logger.Info("delete job requested", zap.String("job_id", jobID))
-	writeJSON(w, http.StatusNotImplemented, jsonResponse{Message: "delete job endpoint placeholder", Data: map[string]string{"jobID": jobID}})
+	job, err := h.store.GetJobByID(r.Context(), jobID)
+	if err != nil {
+		logger.Error("failed to fetch job", zap.Error(err), zap.String("job_id", jobID))
+		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
+		return
+	}
+	if job.UserID != claims.Subject {
+		logger.Warn("delete job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
+		return
+	}
+
+	if err := h.store.DeleteJob(r.Context(), jobID, claims.Subject); err != nil {
+		logger.Error("failed to delete job", zap.Error(err), zap.String("job_id", jobID))
+		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to delete job"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, jsonResponse{Message: "job deleted"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {

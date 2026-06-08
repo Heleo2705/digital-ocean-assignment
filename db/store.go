@@ -12,7 +12,7 @@ type Store struct {
 	db *sql.DB
 }
 
-type User struct {
+type StoreUser struct {
 	ID           string
 	Email        string
 	PasswordHash string
@@ -20,24 +20,26 @@ type User struct {
 	UpdatedAt    time.Time
 }
 
-type Job struct {
-	ID          string
-	UserID      string
-	Type        string
-	Name        string
-	WebhookURL  string
-	Payload     []byte
-	State       string
-	MaxRetries  int
-	Attempts    int
-	ScheduledAt time.Time
-	LastError   sql.NullString
-	Result      []byte
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+type StoreJob struct {
+	ID             string
+	UserID         string
+	Type           string
+	Name           string
+	WebhookURL     string
+	Payload        []byte
+	Version        int
+	MaxRetries     int
+	TimeoutSeconds int
+	State          string
+	Attempts       int
+	ScheduledAt    time.Time
+	LastError      sql.NullString
+	Result         []byte
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-type IdempotencyKey struct {
+type StoreIdempotencyKey struct {
 	ID          string
 	UserID      string
 	RequestHash string
@@ -49,7 +51,7 @@ type IdempotencyKey struct {
 	ExpiresAt   time.Time
 }
 
-type OutboxEvent struct {
+type StoreOutboxEvent struct {
 	ID            string
 	AggregateType string
 	AggregateID   string
@@ -60,16 +62,18 @@ type OutboxEvent struct {
 	UpdatedAt     time.Time
 }
 
-type CreateJobParams struct {
-	UserID     string
-	Type       string
-	Name       string
-	WebhookURL string
-	Payload    []byte
-	MaxRetries int
+type StoreCreateJobParams struct {
+	UserID         string
+	Type           string
+	Name           string
+	WebhookURL     string
+	Payload        []byte
+	MaxRetries     int
+	TimeoutSeconds int
+	Version        int
 }
 
-type CreateOutboxEventParams struct {
+type StoreCreateOutboxEventParams struct {
 	AggregateType string
 	AggregateID   string
 	EventType     string
@@ -95,8 +99,8 @@ RETURNING id
 	return id, err
 }
 
-func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
-	var user User
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*StoreUser, error) {
+	var user StoreUser
 	err := s.db.QueryRowContext(ctx, `
 SELECT id, email, password_hash, created_at, updated_at
 FROM users
@@ -108,18 +112,18 @@ WHERE email = $1
 	return &user, nil
 }
 
-func (s *Store) GetJobByID(ctx context.Context, jobID string) (*Job, error) {
+func (s *Store) GetJobByID(ctx context.Context, jobID string) (*StoreJob, error) {
 	return s.GetJobByIDTx(ctx, nil, jobID)
 }
 
-func (s *Store) GetJobByIDTx(ctx context.Context, tx *sql.Tx, jobID string) (*Job, error) {
+func (s *Store) GetJobByIDTx(ctx context.Context, tx *sql.Tx, jobID string) (*StoreJob, error) {
 	query := `
-SELECT id, user_id, type, name, webhook_url, payload, state, max_retries, attempts, scheduled_at, last_error, result, created_at, updated_at
+SELECT id, user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at, last_error, result, created_at, updated_at
 FROM jobs
 WHERE id = $1
 `
 	row := s.queryRow(ctx, tx, query, jobID)
-	var job Job
+	var job StoreJob
 	err := row.Scan(
 		&job.ID,
 		&job.UserID,
@@ -127,8 +131,10 @@ WHERE id = $1
 		&job.Name,
 		&job.WebhookURL,
 		&job.Payload,
-		&job.State,
+		&job.Version,
 		&job.MaxRetries,
+		&job.TimeoutSeconds,
+		&job.State,
 		&job.Attempts,
 		&job.ScheduledAt,
 		&job.LastError,
@@ -142,6 +148,115 @@ WHERE id = $1
 	return &job, nil
 }
 
+func (s *Store) GetJobByIDForUpdateTx(ctx context.Context, tx *sql.Tx, jobID string) (*StoreJob, error) {
+	query := `
+SELECT id, user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at, last_error, result, created_at, updated_at
+FROM jobs
+WHERE id = $1
+FOR UPDATE
+`
+	row := tx.QueryRowContext(ctx, query, jobID)
+	var job StoreJob
+	err := row.Scan(
+		&job.ID,
+		&job.UserID,
+		&job.Type,
+		&job.Name,
+		&job.WebhookURL,
+		&job.Payload,
+		&job.Version,
+		&job.MaxRetries,
+		&job.TimeoutSeconds,
+		&job.State,
+		&job.Attempts,
+		&job.ScheduledAt,
+		&job.LastError,
+		&job.Result,
+		&job.CreatedAt,
+		&job.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+func (s *Store) ListJobsByUser(ctx context.Context, userID string) ([]StoreJob, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at, last_error, result, created_at, updated_at
+FROM jobs
+WHERE user_id = $1
+ORDER BY created_at DESC
+`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var jobs []StoreJob
+	for rows.Next() {
+		var job StoreJob
+		if err := rows.Scan(
+			&job.ID,
+			&job.UserID,
+			&job.Type,
+			&job.Name,
+			&job.WebhookURL,
+			&job.Payload,
+			&job.Version,
+			&job.MaxRetries,
+			&job.TimeoutSeconds,
+			&job.State,
+			&job.Attempts,
+			&job.ScheduledAt,
+			&job.LastError,
+			&job.Result,
+			&job.CreatedAt,
+			&job.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *Store) UpdateJobDetails(ctx context.Context, jobID, userID, name, webhookURL string, maxRetries, timeoutSeconds int) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE jobs
+SET name = $1, webhook_url = $2, max_retries = $3, timeout_seconds = $4, updated_at = now()
+WHERE id = $5 AND user_id = $6
+`, name, webhookURL, maxRetries, timeoutSeconds, jobID, userID)
+	return err
+}
+
+func (s *Store) DeleteJob(ctx context.Context, jobID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM jobs
+WHERE id = $1 AND user_id = $2
+`, jobID, userID)
+	return err
+}
+
+func (s *Store) IncrementJobAttemptsTx(ctx context.Context, tx *sql.Tx, jobID string) (int, error) {
+	var attempts int
+	err := tx.QueryRowContext(ctx, `
+UPDATE jobs
+SET attempts = attempts + 1, updated_at = now()
+WHERE id = $1
+RETURNING attempts
+`, jobID).Scan(&attempts)
+	return attempts, err
+}
+
+func (s *Store) UpdateJobStateTx(ctx context.Context, tx *sql.Tx, jobID, state string, lastError sql.NullString, result []byte, attempts int) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE jobs
+SET state = $1, last_error = $2, result = $3, attempts = $4, updated_at = now()
+WHERE id = $5
+`, state, lastError, result, attempts, jobID)
+	return err
+}
+
 func (s *Store) queryRow(ctx context.Context, tx *sql.Tx, query string, args ...interface{}) *sql.Row {
 	if tx != nil {
 		return tx.QueryRowContext(ctx, query, args...)
@@ -152,8 +267,8 @@ func (s *Store) queryRow(ctx context.Context, tx *sql.Tx, query string, args ...
 func (s *Store) CreateJobWithIdempotency(
 	ctx context.Context,
 	userID, requestHash, method, path string,
-	params CreateJobParams,
-) (*Job, bool, error) {
+	params StoreCreateJobParams,
+) (*StoreJob, bool, error) {
 	tx, err := s.BeginTx(ctx)
 	if err != nil {
 		return nil, false, err
@@ -184,11 +299,19 @@ WHERE user_id = $1 AND request_hash = $2
 	if maxRetries <= 0 {
 		maxRetries = 5
 	}
+	timeoutSeconds := params.TimeoutSeconds
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 15
+	}
+	version := params.Version
+	if version <= 0 {
+		version = 1
+	}
 	err = tx.QueryRowContext(ctx, `
-INSERT INTO jobs (user_id, type, name, webhook_url, payload, state, max_retries, attempts, scheduled_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO jobs (user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id
-`, params.UserID, params.Type, params.Name, params.WebhookURL, params.Payload, "queued", maxRetries, 0, time.Now()).Scan(&jobID)
+`, params.UserID, params.Type, params.Name, params.WebhookURL, params.Payload, version, maxRetries, timeoutSeconds, "queued", 0, time.Now()).Scan(&jobID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -232,7 +355,7 @@ VALUES ($1, $2, $3, $4, $5)
 	return job, false, nil
 }
 
-func (s *Store) GetUnpublishedOutboxEventsTx(ctx context.Context, tx *sql.Tx, limit int) ([]OutboxEvent, error) {
+func (s *Store) GetUnpublishedOutboxEventsTx(ctx context.Context, tx *sql.Tx, limit int) ([]StoreOutboxEvent, error) {
 	query := `
 SELECT id, aggregate_type, aggregate_id, event_type, payload, published, created_at, updated_at
 FROM outbox
@@ -247,9 +370,9 @@ FOR UPDATE SKIP LOCKED
 	}
 	defer rows.Close()
 
-	var events []OutboxEvent
+	var events []StoreOutboxEvent
 	for rows.Next() {
-		var event OutboxEvent
+		var event StoreOutboxEvent
 		if err := rows.Scan(&event.ID, &event.AggregateType, &event.AggregateID, &event.EventType, &event.Payload, &event.Published, &event.CreatedAt, &event.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -294,9 +417,19 @@ WHERE id = $1
 	return err
 }
 
-func (s *Store) CreateOutboxEvent(ctx context.Context, params CreateOutboxEventParams) (string, error) {
+func (s *Store) CreateOutboxEvent(ctx context.Context, params StoreCreateOutboxEventParams) (string, error) {
 	var id string
 	err := s.db.QueryRowContext(ctx, `
+INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, published)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id
+`, params.AggregateType, params.AggregateID, params.EventType, params.Payload, params.Published).Scan(&id)
+	return id, err
+}
+
+func (s *Store) CreateOutboxEventTx(ctx context.Context, tx *sql.Tx, params StoreCreateOutboxEventParams) (string, error) {
+	var id string
+	err := tx.QueryRowContext(ctx, `
 INSERT INTO outbox (aggregate_type, aggregate_id, event_type, payload, published)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id

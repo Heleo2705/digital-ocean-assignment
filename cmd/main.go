@@ -33,12 +33,19 @@ func main() {
 	}
 	defer dbConn.Close()
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		logger.Fatal("JWT_SECRET is required")
+	}
+
 	store := db.NewStore(dbConn)
 	h := handler.New(store)
 
+	jwtAuth := appmiddleware.NewJWTAuth(jwtSecret)
+
 	r := chi.NewRouter()
 	r.Use(appmiddleware.RequestLogger(logger))
-	h.RegisterRoutes(r)
+	h.RegisterRoutes(r, jwtAuth)
 
 	logger.Info("starting app", zap.String("addr", ":8000"))
 	if err := http.ListenAndServe(":8000", r); err != nil {

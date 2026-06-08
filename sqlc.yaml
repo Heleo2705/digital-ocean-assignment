@@ -1,5 +1,13 @@
 version: "2"
 
+overrides:
+  go:
+    overrides:
+      - db_type: "uuid"
+        go_type:
+          import: "github.com/google/uuid"
+          type: "UUID"
+
 sql:
   - schema: "migrations/*.sql"
     queries: "db/query/*.sql"
@@ -8,8 +16,4 @@ sql:
       go:
         package: "db"
         out: "db"
-    overrides:
-      - go_type:
-          type: "uuid"
-          import: "github.com/google/uuid"
-          array: false
+        sql_package: "pgx/v5"
