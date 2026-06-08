@@ -1,0 +1,160 @@
+================================================================================
+  ASSIGNMENT API — End-to-End Demo
+  Host: http://168.144.156.101:8000
+  Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+================================================================================
+
+---[ 1. Health Check ]----------------------------------------------------------
+GET /health
+
+Input:
+  None
+
+Output:
+  {"message":"ok"}
+
+---[ 2. Register a New User ]---------------------------------------------------
+POST /register
+
+Input:
+  {"email":"demo@example.com","password":"secret123","username":"demo_user"}
+
+Output:
+  {"message":"registration successful","data":{"user_id":"...","access_token":"eyJ...","refresh_token":"eyJ..."}}
+
+  Notes: user_id is a UUIDv4. access_token expires in 15 min, refresh_token in 7 days.
+         A username is optional; if omitted it defaults to the email.
+
+---[ 3. Login as Existing User ]------------------------------------------------
+POST /login
+
+Input:
+  {"email":"demo@example.com","password":"secret123"}
+
+Output:
+  {"message":"login successful","data":{"user_id":"...","access_token":"eyJ...","refresh_token":"eyJ..."}}
+
+---[ 4. Create a Job (Async Processing) ]---------------------------------------
+POST /jobs
+Authorization: Bearer <access_token>
+
+Input:
+  {
+    "type": "email",
+    "name": "welcome-email",
+    "webhook_url": "http://webhook:9000/echo",
+    "version": 1,
+    "max_retries": 3,
+    "timeout_seconds": 30
+  }
+
+Output (first attempt):
+  {"message":"job registration accepted","data":{"job_id":"...","state":"pending"}}
+
+Output (same payload — idempotent):
+  {"message":"job already registered","data":{"job_id":"...","state":"pending"}}
+
+  Notes: The job starts in "pending" state. The outbox poller picks it up,
+         enqueues an Asynq task, and the worker processes it.
+         Processing simulates 1-5s of work. 20% of jobs fail randomly.
+         On success → "completed". On failure → retried up to max_retries.
+
+---[ 5. List User's Jobs (Paginated) ]-----------------------------------------
+GET /jobs?page=1&page_size=10
+Authorization: Bearer <access_token>
+
+Input:
+  None (query params: page, page_size)
+
+Output:
+  {"message":"jobs listed","data":[
+    {"id":"...","type":"email","name":"welcome-email","webhook_url":"http://webhook:9000/echo",
+     "version":1,"max_retries":3,"timeout_seconds":30,
+     "state":"completed","attempts":1,
+     "scheduled_at":"...","last_error":"","result":{...}}
+  ]}
+
+  Notes: Default page=1, page_size=20. Results ordered by created_at DESC.
+
+---[ 6. Get a Single Job ]------------------------------------------------------
+GET /jobs/{job_id}
+Authorization: Bearer <access_token>
+
+Input:
+  None (path param: job_id)
+
+Output:
+  {"message":"job fetched","data":{
+    "id":"...","type":"email","name":"welcome-email",
+    "webhook_url":"http://webhook:9000/echo","state":"completed",
+    "attempts":1,"result":{"status":"ok"}
+  }}
+
+  Notes: Returns 404 if not found, 403 if the job belongs to another user.
+
+---[ 7. Update Job Details ]----------------------------------------------------
+PUT /jobs/{job_id}
+Authorization: Bearer <access_token>
+
+Input:
+  {"name":"updated-name","max_retries":5,"timeout_seconds":60,"version":2}
+
+Output:
+  {"message":"job updated"}
+
+  Notes: Only provided fields are changed. Version, max_retries, timeout_seconds,
+         name, and webhook_url can all be updated.
+
+---[ 8. Delete a Job ]----------------------------------------------------------
+DELETE /jobs/{job_id}
+Authorization: Bearer <access_token>
+
+Input:
+  None (path param: job_id)
+
+Output:
+  {"message":"job deleted"}
+
+  Notes: Returns 200 even if the job doesn't exist (idempotent delete).
+         403 if the job belongs to another user.
+
+---[ 9. Swagger UI ]------------------------------------------------------------
+GET /swagger/index.html
+
+  http://168.144.156.101:8000/swagger/index.html
+
+  Notes: Interactive API documentation. Try out any endpoint directly from
+         the browser. Authenticate by clicking "Authorize" and entering
+         "Bearer <token>" from /register or /login.
+
+================================================================================
+  STACK OVERVIEW
+================================================================================
+
+  API (Go + Chi)         :8000  — REST endpoints + Swagger UI
+  Worker (Go + Asynq)    —      — Async task processor
+  Webhook Receiver (Go)  :9000  — E2E test echo endpoint
+  PostgreSQL (15 Alpine) :5432  — Primary data store
+  Redis (7 Alpine)       :6379  — Asynq task queue backend
+  Nginx                  :80    — Reverse proxy to API (optional)
+
+================================================================================
+  NOTES
+================================================================================
+
+- Idempotency: POST /jobs with the same payload returns the existing job.
+  The hash is computed from canonical (sorted-key) JSON via SHA-256.
+
+- Auth: Register or login to get a JWT. Use it as:
+    Authorization: Bearer <token>
+
+- Pagination: GET /jobs supports ?page=1&page_size=20 (defaults 1, 20).
+
+- Outbox Pattern: Job creation writes an outbox event in the same transaction.
+  The outbox poller (2 goroutines, 5s interval) picks it up and enqueues an
+  Asynq task — ensuring exactly-once semantics for job creation.
+
+- Processing Simulation: The worker sleeps 1-5s before executing each job.
+  20% of jobs fail randomly to demonstrate the retry mechanism.
+
+================================================================================
