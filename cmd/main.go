@@ -33,19 +33,31 @@ func main() {
 	}
 	defer dbConn.Close()
 
+	store := db.NewStore(dbConn)
+	h := handler.New(store)
+
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		logger.Fatal("JWT_SECRET is required")
 	}
 
-	store := db.NewStore(dbConn)
-	h := handler.New(store)
+	var auth func(http.Handler) http.Handler
 
-	jwtAuth := appmiddleware.NewJWTAuth(jwtSecret)
+	keycloakURL := os.Getenv("KEYCLOAK_URL")
+	if keycloakURL != "" {
+		clientID := os.Getenv("KEYCLOAK_CLIENT_ID")
+		if clientID == "" {
+			clientID = "assignment-api"
+		}
+		logger.Info("using keycloak authentication", zap.String("issuer", keycloakURL), zap.String("client_id", clientID))
+		auth = appmiddleware.NewKeycloakAuth(keycloakURL, clientID)
+	} else {
+		auth = appmiddleware.NewJWTAuth(jwtSecret)
+	}
 
 	r := chi.NewRouter()
 	r.Use(appmiddleware.RequestLogger(logger))
-	h.RegisterRoutes(r, jwtAuth)
+	h.RegisterRoutes(r, auth)
 
 	logger.Info("starting app", zap.String("addr", ":8000"))
 	if err := http.ListenAndServe(":8000", r); err != nil {

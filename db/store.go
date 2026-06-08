@@ -15,6 +15,7 @@ type Store struct {
 type StoreUser struct {
 	ID           string
 	Email        string
+	Username     string
 	PasswordHash string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -89,23 +90,23 @@ func (s *Store) BeginTx(ctx context.Context) (*sql.Tx, error) {
 	return s.db.BeginTx(ctx, nil)
 }
 
-func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (string, error) {
+func (s *Store) CreateUser(ctx context.Context, email, username, passwordHash string) (string, error) {
 	var id string
 	err := s.db.QueryRowContext(ctx, `
-INSERT INTO users (email, password_hash)
-VALUES ($1, $2)
+INSERT INTO users (email, username, password_hash)
+VALUES ($1, $2, $3)
 RETURNING id
-`, email, passwordHash).Scan(&id)
+`, email, username, passwordHash).Scan(&id)
 	return id, err
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*StoreUser, error) {
 	var user StoreUser
 	err := s.db.QueryRowContext(ctx, `
-SELECT id, email, password_hash, created_at, updated_at
+SELECT id, email, username, password_hash, created_at, updated_at
 FROM users
 WHERE email = $1
-`, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
+`, email).Scan(&user.ID, &user.Email, &user.Username, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -181,13 +182,17 @@ FOR UPDATE
 	return &job, nil
 }
 
-func (s *Store) ListJobsByUser(ctx context.Context, userID string) ([]StoreJob, error) {
+func (s *Store) ListJobsByUser(ctx context.Context, userID string, limit, offset int) ([]StoreJob, error) {
+	if limit <= 0 {
+		limit = 20
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at, last_error, result, created_at, updated_at
 FROM jobs
 WHERE user_id = $1
 ORDER BY created_at DESC
-`, userID)
+LIMIT $2 OFFSET $3
+`, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -220,12 +225,12 @@ ORDER BY created_at DESC
 	return jobs, rows.Err()
 }
 
-func (s *Store) UpdateJobDetails(ctx context.Context, jobID, userID, name, webhookURL string, maxRetries, timeoutSeconds int) error {
+func (s *Store) UpdateJobDetails(ctx context.Context, jobID, userID, name, webhookURL string, maxRetries, timeoutSeconds, version int) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE jobs
-SET name = $1, webhook_url = $2, max_retries = $3, timeout_seconds = $4, updated_at = now()
-WHERE id = $5 AND user_id = $6
-`, name, webhookURL, maxRetries, timeoutSeconds, jobID, userID)
+SET name = $1, webhook_url = $2, max_retries = $3, timeout_seconds = $4, version = $5, updated_at = now()
+WHERE id = $6 AND user_id = $7
+`, name, webhookURL, maxRetries, timeoutSeconds, version, jobID, userID)
 	return err
 }
 
@@ -311,7 +316,7 @@ WHERE user_id = $1 AND request_hash = $2
 INSERT INTO jobs (user_id, type, name, webhook_url, payload, version, max_retries, timeout_seconds, state, attempts, scheduled_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id
-`, params.UserID, params.Type, params.Name, params.WebhookURL, params.Payload, version, maxRetries, timeoutSeconds, "queued", 0, time.Now()).Scan(&jobID)
+`, params.UserID, params.Type, params.Name, params.WebhookURL, params.Payload, version, maxRetries, timeoutSeconds, "pending", 0, time.Now()).Scan(&jobID)
 	if err != nil {
 		return nil, false, err
 	}

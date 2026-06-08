@@ -1,5 +1,5 @@
-# Multi-stage Dockerfile for the worker (Go 1.25, Alpine)
-FROM golang:1.25-alpine AS builder
+# Multi-stage Dockerfile for the worker (Go 1.26, Alpine)
+FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 COPY go.mod go.sum ./

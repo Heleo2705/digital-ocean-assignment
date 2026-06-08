@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/Heleo2705/assignment/db"
@@ -20,6 +21,17 @@ type Handler struct {
 type authRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Username string `json:"username,omitempty"`
+}
+
+func getUserID(r *http.Request) string {
+	if claims := middleware.GetJWTClaims(r); claims != nil {
+		return claims.Subject
+	}
+	if claims := middleware.GetKeycloakClaims(r); claims != nil {
+		return claims.UserID()
+	}
+	return ""
 }
 
 type registerJobRequest struct {
@@ -34,6 +46,7 @@ type registerJobRequest struct {
 type updateJobRequest struct {
 	Name           *string `json:"name,omitempty"`
 	WebhookURL     *string `json:"webhook_url,omitempty"`
+	Version        *int    `json:"version,omitempty"`
 	MaxRetries     *int    `json:"max_retries,omitempty"`
 	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
 }
@@ -82,6 +95,11 @@ func (h *Handler) registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username := req.Username
+	if username == "" {
+		username = req.Email
+	}
+
 	hashedPassword, err := service.HashPassword(req.Password)
 	if err != nil {
 		logger.Error("failed to hash password", zap.Error(err))
@@ -89,7 +107,7 @@ func (h *Handler) registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := h.store.CreateUser(r.Context(), req.Email, string(hashedPassword))
+	userID, err := h.store.CreateUser(r.Context(), req.Email, username, string(hashedPassword))
 	if err != nil {
 		logger.Error("failed to create user", zap.Error(err), zap.String("email", req.Email))
 		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to create user"})
@@ -160,13 +178,12 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
+	userID := getUserID(r)
+	if userID == "" {
 		logger.Warn("create job failed: missing auth claims")
 		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
 	}
-	userID := claims.Subject
 
 	var req registerJobRequest
 	decoder := json.NewDecoder(r.Body)
@@ -225,14 +242,24 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
+	userID := getUserID(r)
+	if userID == "" {
 		logger.Warn("list jobs failed: missing auth claims")
 		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
 	}
 
-	jobs, err := h.store.ListJobsByUser(r.Context(), claims.Subject)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	jobs, err := h.store.ListJobsByUser(r.Context(), userID, pageSize, offset)
 	if err != nil {
 		logger.Error("failed to list jobs", zap.Error(err))
 		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to list jobs"})
@@ -263,8 +290,8 @@ func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
+	userID := getUserID(r)
+	if userID == "" {
 		logger.Warn("get job failed: missing auth claims")
 		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
@@ -277,8 +304,8 @@ func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
 		return
 	}
-	if job.UserID != claims.Subject {
-		logger.Warn("get job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+	if job.UserID != userID {
+		logger.Warn("get job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", userID))
 		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
 		return
 	}
@@ -302,8 +329,8 @@ func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
+	userID := getUserID(r)
+	if userID == "" {
 		logger.Warn("update job failed: missing auth claims")
 		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
@@ -318,7 +345,7 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, jsonResponse{Message: "invalid request payload"})
 		return
 	}
-	if req.Name == nil && req.WebhookURL == nil && req.MaxRetries == nil && req.TimeoutSeconds == nil {
+	if req.Name == nil && req.WebhookURL == nil && req.Version == nil && req.MaxRetries == nil && req.TimeoutSeconds == nil {
 		writeJSON(w, http.StatusBadRequest, jsonResponse{Message: "no fields to update"})
 		return
 	}
@@ -329,8 +356,8 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
 		return
 	}
-	if job.UserID != claims.Subject {
-		logger.Warn("update job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+	if job.UserID != userID {
+		logger.Warn("update job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", userID))
 		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
 		return
 	}
@@ -341,6 +368,9 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	if req.WebhookURL != nil {
 		job.WebhookURL = *req.WebhookURL
 	}
+	if req.Version != nil && *req.Version > 0 {
+		job.Version = *req.Version
+	}
 	if req.MaxRetries != nil && *req.MaxRetries > 0 {
 		job.MaxRetries = *req.MaxRetries
 	}
@@ -348,7 +378,7 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 		job.TimeoutSeconds = *req.TimeoutSeconds
 	}
 
-	if err := h.store.UpdateJobDetails(r.Context(), job.ID, job.UserID, job.Name, job.WebhookURL, job.MaxRetries, job.TimeoutSeconds); err != nil {
+	if err := h.store.UpdateJobDetails(r.Context(), job.ID, job.UserID, job.Name, job.WebhookURL, job.MaxRetries, job.TimeoutSeconds, job.Version); err != nil {
 		logger.Error("failed to update job", zap.Error(err), zap.String("job_id", jobID))
 		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to update job"})
 		return
@@ -359,8 +389,8 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
+	userID := getUserID(r)
+	if userID == "" {
 		logger.Warn("delete job failed: missing auth claims")
 		writeJSON(w, http.StatusUnauthorized, jsonResponse{Message: "unauthorized"})
 		return
@@ -373,13 +403,13 @@ func (h *Handler) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, jsonResponse{Message: "job not found"})
 		return
 	}
-	if job.UserID != claims.Subject {
-		logger.Warn("delete job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", claims.Subject))
+	if job.UserID != userID {
+		logger.Warn("delete job failed: unauthorized job access", zap.String("job_id", jobID), zap.String("user_id", userID))
 		writeJSON(w, http.StatusForbidden, jsonResponse{Message: "forbidden"})
 		return
 	}
 
-	if err := h.store.DeleteJob(r.Context(), jobID, claims.Subject); err != nil {
+	if err := h.store.DeleteJob(r.Context(), jobID, userID); err != nil {
 		logger.Error("failed to delete job", zap.Error(err), zap.String("job_id", jobID))
 		writeJSON(w, http.StatusInternalServerError, jsonResponse{Message: "failed to delete job"})
 		return
