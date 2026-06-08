@@ -11,5 +11,6 @@ RUN go build -ldflags='-s -w' -o /app/main ./cmd/main.go
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates && update-ca-certificates
 COPY --from=builder /app/main /app/main
+COPY --from=builder /src/migrations /migrations
 EXPOSE 8000
 ENTRYPOINT ["/app/main"]

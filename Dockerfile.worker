@@ -11,4 +11,5 @@ RUN go build -ldflags='-s -w' -o /app/worker ./cmd/worker
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates && update-ca-certificates
 COPY --from=builder /app/worker /app/worker
+COPY --from=builder /src/migrations /migrations
 ENTRYPOINT ["/app/worker"]
