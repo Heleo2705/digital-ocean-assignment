@@ -1,32 +1,46 @@
-﻿# DEMO OUTPUT 2026-06-08 00:34:45
+DEMO RUN 2026-06-08T07:41:30Z
 Host: http://168.144.156.101:8000
 
-# --- 1. Health Check ---
-Input: GET /health
-Output: {"message":"ok"}
+=== 1. Health ===
+{"message":"ok"}
 
-# --- 2. Register ---
-Input: POST /register {"email":"demo@test.com","password":"pass","username":"demo"}
-Output: {"message":"registration successful","data":{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1MjkxZDI2OC1jOWJmLTQ3YjgtYWY1NC05ZTQ4YjdkYzkwNDYiLCJleHAiOjE3ODA5MDQ5ODUsImlhdCI6MTc4MDkwNDA4NSwiZW1haWwiOiJkZW1vQHRlc3QuY29tIn0.WGrDUJohLbA9EtOQHI0jCspY3OWR8Tp9mOpFS1ZM9bo","refresh_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1MjkxZDI2OC1jOWJmLTQ3YjgtYWY1NC05ZTQ4YjdkYzkwNDYiLCJleHAiOjE3ODE1MDg4ODUsImlhdCI6MTc4MDkwNDA4NX0.Ip_Njf7qt0VHEKJaeLd2FXZFErnkCaTp61ERrdBubFY","user_id":"5291d268-c9bf-47b8-af54-9e48b7dc9046"}}
+=== 2. Register ===
+{
+    "message": "failed to create user"
+}
 
-# --- 3. Create Job ---
-Input: POST /jobs {"type":"email","name":"welcome","webhook_url":"http://webhook:9000/echo"}  
-Output: {"message":"job registration accepted","data":{"job_id":"710a8367-3d60-4298-8358-d238ff0e9eba","state":"pending"}}
+=== 3. Create Job ===
 
-# --- 4. Idempotent Create ---
-Input: Same payload again
-Output: {"message":"job already registered","data":{"job_id":"710a8367-3d60-4298-8358-d238ff0e9eba","state":"pending"}}  (HTTP 200 = idempotent)
+=== 4. Poll for completion ===
+[1s] state=
+[2s] state=
+[3s] state=
+[4s] state=
+[5s] state=
+[6s] state=
+[7s] state=
+[8s] state=
+[9s] state=
+[10s] state=
+[11s] state=
+[12s] state=
+[13s] state=
+[14s] state=
+[15s] state=
+[16s] state=
+[17s] state=
+[18s] state=
+[19s] state=
+[20s] state=
+[21s] state=
+[22s] state=
+[23s] state=
+[24s] state=
+[25s] state=
+[26s] state=
+[27s] state=
+[28s] state=
+[29s] state=
+[30s] state=
 
-# --- 5. List Jobs ---
-Input: GET /jobs?page=1&page_size=5
-Output: {"message":"jobs listed","data":[{"attempts":0,"id":"710a8367-3d60-4298-8358-d238ff0e9eba","last_error":"","max_retries":3,"name":"welcome","payload":{"name":"welcome","type":"email","version":1,"max_retries":3,"webhook_url":"http://webhook:9000/echo","timeout_seconds":30},"result":null,"scheduled_at":"2026-06-08T07:34:45.900756Z","state":"pending","timeout_seconds":30,"type":"email","version":1,"webhook_url":"http://webhook:9000/echo"}]}
-
-# --- 6. Poll Job until completion ---
-# --- 7. Update Job ---
-Input: PUT /jobs/710a8367-3d60-4298-8358-d238ff0e9eba {"name":"updated-name","max_retries":5}
-Output: {"message":"job updated"}
-
-# --- 8. Delete Job ---
-Input: DELETE /jobs/710a8367-3d60-4298-8358-d238ff0e9eba
-Output: {"message":"job deleted"}
-
+=== 5. List Jobs ===
