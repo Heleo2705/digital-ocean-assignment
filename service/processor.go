@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
+	"math/rand"
 	"net/http"
 	"time"
 
@@ -52,6 +53,19 @@ func ProcessJobTask(ctx context.Context, store *db.Store, task *asynq.Task, logg
 
 	logger = logger.With(zap.String("job_id", job.ID), zap.String("outbox_id", payload.OutboxID), zap.Int("attempt", attempts))
 	logger.Info("starting job execution")
+
+	sleepMs := time.Duration(1000+rand.Intn(4000)) * time.Millisecond
+	logger.Info("simulating processing", zap.Duration("sleep", sleepMs))
+	select {
+	case <-time.After(sleepMs):
+	case <-ctx.Done():
+		return nil
+	}
+
+	if rand.Float32() < 0.2 {
+		logger.Warn("random failure injected")
+		return &WebhookError{StatusCode: 500, Body: []byte("simulated random failure")}
+	}
 
 	result, err := executeJobWebhook(ctx, job)
 	if err != nil {
