@@ -7,10 +7,6 @@ import (
 	"github.com/Heleo2705/assignment/service"
 )
 
-type contextKey string
-
-const claimsContextKey contextKey = "keycloakClaims"
-
 func NewKeycloakAuth(issuer, clientID string) func(http.Handler) http.Handler {
 	kc := service.NewKeycloakService(issuer, clientID)
 

@@ -27,9 +27,18 @@ func main() {
 		logger.Fatal("database migration failed", zap.Error(err))
 	}
 
+	dbConn, err := db.OpenDatabase(databaseURL)
+	if err != nil {
+		logger.Fatal("failed to open database", zap.Error(err))
+	}
+	defer dbConn.Close()
+
+	store := db.NewStore(dbConn)
+	h := handler.New(store)
+
 	r := chi.NewRouter()
 	r.Use(appmiddleware.RequestLogger(logger))
-	handler.RegisterRoutes(r)
+	h.RegisterRoutes(r)
 
 	logger.Info("starting app", zap.String("addr", ":8000"))
 	if err := http.ListenAndServe(":8000", r); err != nil {
