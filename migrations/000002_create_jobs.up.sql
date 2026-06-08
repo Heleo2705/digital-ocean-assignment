@@ -3,8 +3,10 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE IF NOT EXISTS jobs (
   id uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
-  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   type text NOT NULL,
+  name text NOT NULL,
+  webhook_url text NOT NULL,
   payload jsonb NOT NULL,
   state text NOT NULL DEFAULT 'pending',
   max_retries int NOT NULL DEFAULT 5,

@@ -2,7 +2,9 @@ package main
 
 import (
 	"net/http"
+	"os"
 
+	"github.com/Heleo2705/assignment/db"
 	"github.com/Heleo2705/assignment/handler"
 	appmiddleware "github.com/Heleo2705/assignment/middleware"
 	"github.com/go-chi/chi/v5"
@@ -15,6 +17,15 @@ func main() {
 		panic(err)
 	}
 	defer logger.Sync()
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		logger.Fatal("DATABASE_URL is required")
+	}
+
+	if err := db.Migrate(databaseURL); err != nil {
+		logger.Fatal("database migration failed", zap.Error(err))
+	}
 
 	r := chi.NewRouter()
 	r.Use(appmiddleware.RequestLogger(logger))
