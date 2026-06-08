@@ -25,13 +25,11 @@ type authRequest struct {
 }
 
 func getUserID(r *http.Request) string {
-	if claims := middleware.GetJWTClaims(r); claims != nil {
-		return claims.Subject
+	claims := middleware.GetJWTClaims(r)
+	if claims == nil {
+		return ""
 	}
-	if claims := middleware.GetKeycloakClaims(r); claims != nil {
-		return claims.UserID()
-	}
-	return ""
+	return claims.Subject
 }
 
 type registerJobRequest struct {

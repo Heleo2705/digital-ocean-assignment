@@ -41,19 +41,7 @@ func main() {
 		logger.Fatal("JWT_SECRET is required")
 	}
 
-	var auth func(http.Handler) http.Handler
-
-	keycloakURL := os.Getenv("KEYCLOAK_URL")
-	if keycloakURL != "" {
-		clientID := os.Getenv("KEYCLOAK_CLIENT_ID")
-		if clientID == "" {
-			clientID = "assignment-api"
-		}
-		logger.Info("using keycloak authentication", zap.String("issuer", keycloakURL), zap.String("client_id", clientID))
-		auth = appmiddleware.NewKeycloakAuth(keycloakURL, clientID)
-	} else {
-		auth = appmiddleware.NewJWTAuth(jwtSecret)
-	}
+	auth := appmiddleware.NewJWTAuth(jwtSecret)
 
 	r := chi.NewRouter()
 	r.Use(appmiddleware.RequestLogger(logger))
