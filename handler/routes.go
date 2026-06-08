@@ -18,40 +18,47 @@ type Handler struct {
 	store *db.Store
 }
 
+// authRequest represents registration or login credentials.
+// @Description User credentials for registration or login.
 type authRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Username string `json:"username,omitempty"`
+	Email    string `json:"email" example:"user@example.com"`
+	Password string `json:"password" example:"securePass123"`
+	Username string `json:"username,omitempty" example:"johndoe"`
+}
+
+// registerJobRequest represents a job registration payload.
+// @Description Payload for registering a new async job.
+type registerJobRequest struct {
+	Type           string `json:"type" example:"email"`
+	Name           string `json:"name" example:"welcome-email"`
+	WebhookURL     string `json:"webhook_url" example:"http://webhook:9000/echo"`
+	Version        *int   `json:"version,omitempty" example:"1"`
+	MaxRetries     *int   `json:"max_retries,omitempty" example:"5"`
+	TimeoutSeconds *int   `json:"timeout_seconds,omitempty" example:"30"`
+}
+
+// updateJobRequest represents a partial job update payload.
+// @Description Fields to update on an existing job. Only non-nil fields are applied.
+type updateJobRequest struct {
+	Name           *string `json:"name,omitempty" example:"rebranded-email"`
+	WebhookURL     *string `json:"webhook_url,omitempty" example:"http://webhook:9000/echo"`
+	Version        *int    `json:"version,omitempty" example:"2"`
+	MaxRetries     *int    `json:"max_retries,omitempty" example:"3"`
+	TimeoutSeconds *int    `json:"timeout_seconds,omitempty" example:"60"`
+}
+
+// jsonResponse is the standard API response envelope.
+// @Description Standard response wrapper used by all endpoints.
+type jsonResponse struct {
+	Message string      `json:"message" example:"ok"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 func getUserID(r *http.Request) string {
-	claims := middleware.GetJWTClaims(r)
-	if claims == nil {
-		return ""
+	if claims := middleware.GetJWTClaims(r); claims != nil {
+		return claims.Subject
 	}
-	return claims.Subject
-}
-
-type registerJobRequest struct {
-	Type           string `json:"type"`
-	Name           string `json:"name"`
-	WebhookURL     string `json:"webhook_url"`
-	Version        *int   `json:"version,omitempty"`
-	MaxRetries     *int   `json:"max_retries,omitempty"`
-	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
-}
-
-type updateJobRequest struct {
-	Name           *string `json:"name,omitempty"`
-	WebhookURL     *string `json:"webhook_url,omitempty"`
-	Version        *int    `json:"version,omitempty"`
-	MaxRetries     *int    `json:"max_retries,omitempty"`
-	TimeoutSeconds *int    `json:"timeout_seconds,omitempty"`
-}
-
-type jsonResponse struct {
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	return ""
 }
 
 func New(store *db.Store) *Handler {
@@ -73,12 +80,30 @@ func (h *Handler) RegisterRoutes(r *chi.Mux, authMiddleware func(http.Handler) h
 	})
 }
 
+// healthHandler godoc
+// @Summary Health check
+// @Description Returns a simple OK response to confirm the API is running.
+// @Tags system
+// @Produce json
+// @Success 200 {object} jsonResponse "API is healthy"
+// @Router /health [get]
 func (h *Handler) healthHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	logger.Info("health check succeeded")
 	writeJSON(w, http.StatusOK, jsonResponse{Message: "ok"})
 }
 
+// registerHandler godoc
+// @Summary Register a new user
+// @Description Creates a user account with email and password, returns JWT access and refresh tokens.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body authRequest true "Registration credentials"
+// @Success 201 {object} jsonResponse "User created — includes user_id, access_token, refresh_token"
+// @Failure 400 {object} jsonResponse "Invalid payload or missing fields"
+// @Failure 500 {object} jsonResponse "Server error"
+// @Router /register [post]
 func (h *Handler) registerHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	var req authRequest
@@ -130,6 +155,17 @@ func (h *Handler) registerHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, jsonResponse{Message: "registration successful", Data: map[string]string{"user_id": userID, "access_token": accessToken, "refresh_token": refreshToken}})
 }
 
+// loginHandler godoc
+// @Summary Authenticate a user
+// @Description Authenticates with email and password, returns JWT access and refresh tokens.
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param body body authRequest true "Login credentials"
+// @Success 200 {object} jsonResponse "Login OK — includes user_id, access_token, refresh_token"
+// @Failure 400 {object} jsonResponse "Invalid payload or missing fields"
+// @Failure 401 {object} jsonResponse "Invalid email or password"
+// @Router /login [post]
 func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	var req authRequest
@@ -174,6 +210,19 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jsonResponse{Message: "login successful", Data: map[string]string{"user_id": user.ID, "access_token": accessToken, "refresh_token": refreshToken}})
 }
 
+// createJobHandler godoc
+// @Summary Create a job
+// @Description Registers an async job to be processed. **Idempotent** — sending the same payload twice returns the existing job with HTTP 200. The idempotency hash is computed from canonical (sorted-key) JSON of all fields.
+// @Tags jobs
+// @Accept json
+// @Produce json
+// @Param body body registerJobRequest true "Job registration payload"
+// @Success 202 {object} jsonResponse "Job accepted for processing — returns job_id and state"
+// @Success 200 {object} jsonResponse "Job already exists (idempotent match) — returns existing job_id and state"
+// @Failure 400 {object} jsonResponse "Invalid payload or missing required fields"
+// @Failure 401 {object} jsonResponse "Missing or invalid Authorization header"
+// @Failure 500 {object} jsonResponse "Server error"
+// @Router /jobs [post]
 func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	userID := getUserID(r)
@@ -238,6 +287,17 @@ func (h *Handler) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusCode, jsonResponse{Message: message, Data: map[string]interface{}{"job_id": job.ID, "state": job.State}})
 }
 
+// listJobsHandler godoc
+// @Summary List user's jobs
+// @Description Returns a paginated list of jobs owned by the authenticated user, newest first.
+// @Tags jobs
+// @Produce json
+// @Param page query int false "Page number (default 1)" minimum(1)
+// @Param page_size query int false "Items per page (default 20, max 100)" minimum(1) maximum(100)
+// @Success 200 {object} jsonResponse "Paginated list of jobs"
+// @Failure 401 {object} jsonResponse "Missing or invalid Authorization header"
+// @Failure 500 {object} jsonResponse "Server error"
+// @Router /jobs [get]
 func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	userID := getUserID(r)
@@ -286,6 +346,17 @@ func (h *Handler) listJobsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jsonResponse{Message: "jobs listed", Data: response})
 }
 
+// getJobHandler godoc
+// @Summary Get a job by ID
+// @Description Returns full details of a specific job owned by the authenticated user.
+// @Tags jobs
+// @Produce json
+// @Param jobID path string true "Job UUID" example(550e8400-e29b-41d4-a716-446655440000)
+// @Success 200 {object} jsonResponse "Job details"
+// @Failure 401 {object} jsonResponse "Missing or invalid Authorization header"
+// @Failure 403 {object} jsonResponse "Job belongs to another user"
+// @Failure 404 {object} jsonResponse "Job not found"
+// @Router /jobs/{jobID} [get]
 func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	userID := getUserID(r)
@@ -325,6 +396,21 @@ func (h *Handler) getJobHandler(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+// updateJobHandler godoc
+// @Summary Update a job
+// @Description Partially updates an existing job. Only the fields included in the request body are changed — omitted fields keep their current values.
+// @Tags jobs
+// @Accept json
+// @Produce json
+// @Param jobID path string true "Job UUID" example(550e8400-e29b-41d4-a716-446655440000)
+// @Param body body updateJobRequest true "Fields to update (all optional — at least one required)"
+// @Success 200 {object} jsonResponse "Job updated successfully"
+// @Failure 400 {object} jsonResponse "Invalid payload or no fields to update"
+// @Failure 401 {object} jsonResponse "Missing or invalid Authorization header"
+// @Failure 403 {object} jsonResponse "Job belongs to another user"
+// @Failure 404 {object} jsonResponse "Job not found"
+// @Failure 500 {object} jsonResponse "Server error"
+// @Router /jobs/{jobID} [put]
 func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	userID := getUserID(r)
@@ -385,6 +471,18 @@ func (h *Handler) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jsonResponse{Message: "job updated"})
 }
 
+// deleteJobHandler godoc
+// @Summary Delete a job
+// @Description Permanently removes a job owned by the authenticated user.
+// @Tags jobs
+// @Produce json
+// @Param jobID path string true "Job UUID" example(550e8400-e29b-41d4-a716-446655440000)
+// @Success 200 {object} jsonResponse "Job deleted successfully"
+// @Failure 401 {object} jsonResponse "Missing or invalid Authorization header"
+// @Failure 403 {object} jsonResponse "Job belongs to another user"
+// @Failure 404 {object} jsonResponse "Job not found"
+// @Failure 500 {object} jsonResponse "Server error"
+// @Router /jobs/{jobID} [delete]
 func (h *Handler) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 	logger := middleware.GetLogger(r)
 	userID := getUserID(r)

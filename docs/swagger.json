@@ -1,0 +1,503 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "Async job processing REST API with idempotent job creation, outbox pattern, and JWT authentication.",
+        "title": "Assignment API",
+        "termsOfService": "https://github.com/Heleo2705/assignment",
+        "contact": {
+            "name": "API Support",
+            "url": "https://github.com/Heleo2705/assignment"
+        },
+        "license": {
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8000",
+    "basePath": "/",
+    "paths": {
+        "/health": {
+            "get": {
+                "description": "Returns a simple OK response to confirm the API is running.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "API is healthy",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs": {
+            "get": {
+                "description": "Returns a paginated list of jobs owned by the authenticated user, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "List user's jobs",
+                "parameters": [
+                    {
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 100,
+                        "minimum": 1,
+                        "type": "integer",
+                        "description": "Items per page (default 20, max 100)",
+                        "name": "page_size",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated list of jobs",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid Authorization header",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Registers an async job to be processed. **Idempotent** — sending the same payload twice returns the existing job with HTTP 200. The idempotency hash is computed from canonical (sorted-key) JSON of all fields.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Create a job",
+                "parameters": [
+                    {
+                        "description": "Job registration payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.registerJobRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job already exists (idempotent match) — returns existing job_id and state",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "202": {
+                        "description": "Job accepted for processing — returns job_id and state",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid payload or missing required fields",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid Authorization header",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/jobs/{jobID}": {
+            "get": {
+                "description": "Returns full details of a specific job owned by the authenticated user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Get a job by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "550e8400-e29b-41d4-a716-446655440000",
+                        "description": "Job UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job details",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid Authorization header",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Job belongs to another user",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Partially updates an existing job. Only the fields included in the request body are changed — omitted fields keep their current values.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Update a job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "550e8400-e29b-41d4-a716-446655440000",
+                        "description": "Job UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Fields to update (all optional — at least one required)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.updateJobRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job updated successfully",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid payload or no fields to update",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid Authorization header",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Job belongs to another user",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Permanently removes a job owned by the authenticated user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "jobs"
+                ],
+                "summary": "Delete a job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "example": "550e8400-e29b-41d4-a716-446655440000",
+                        "description": "Job UUID",
+                        "name": "jobID",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Job deleted successfully",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid Authorization header",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Job belongs to another user",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Job not found",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/login": {
+            "post": {
+                "description": "Authenticates with email and password, returns JWT access and refresh tokens.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Authenticate a user",
+                "parameters": [
+                    {
+                        "description": "Login credentials",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.authRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Login OK — includes user_id, access_token, refresh_token",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid payload or missing fields",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid email or password",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/register": {
+            "post": {
+                "description": "Creates a user account with email and password, returns JWT access and refresh tokens.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Register a new user",
+                "parameters": [
+                    {
+                        "description": "Registration credentials",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handler.authRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "User created — includes user_id, access_token, refresh_token",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid payload or missing fields",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server error",
+                        "schema": {
+                            "$ref": "#/definitions/handler.jsonResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "handler.authRequest": {
+            "description": "User credentials for registration or login.",
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "example": "user@example.com"
+                },
+                "password": {
+                    "type": "string",
+                    "example": "securePass123"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "johndoe"
+                }
+            }
+        },
+        "handler.jsonResponse": {
+            "description": "Standard response wrapper used by all endpoints.",
+            "type": "object",
+            "properties": {
+                "data": {},
+                "message": {
+                    "type": "string",
+                    "example": "ok"
+                }
+            }
+        },
+        "handler.registerJobRequest": {
+            "description": "Payload for registering a new async job.",
+            "type": "object",
+            "properties": {
+                "max_retries": {
+                    "type": "integer",
+                    "example": 5
+                },
+                "name": {
+                    "type": "string",
+                    "example": "welcome-email"
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "example": 30
+                },
+                "type": {
+                    "type": "string",
+                    "example": "email"
+                },
+                "version": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "webhook_url": {
+                    "type": "string",
+                    "example": "http://webhook:9000/echo"
+                }
+            }
+        },
+        "handler.updateJobRequest": {
+            "description": "Fields to update on an existing job. Only non-nil fields are applied.",
+            "type": "object",
+            "properties": {
+                "max_retries": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "name": {
+                    "type": "string",
+                    "example": "rebranded-email"
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "example": 60
+                },
+                "version": {
+                    "type": "integer",
+                    "example": 2
+                },
+                "webhook_url": {
+                    "type": "string",
+                    "example": "http://webhook:9000/echo"
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "BearerAuth": {
+            "description": "Enter \"Bearer \u003ctoken\u003e\" — get a token from POST /register or /login",
+            "type": "apiKey",
+            "name": "Authorization",
+            "in": "header"
+        }
+    }
+}

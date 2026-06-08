@@ -1,0 +1,350 @@
+basePath: /
+definitions:
+  handler.authRequest:
+    description: User credentials for registration or login.
+    properties:
+      email:
+        example: user@example.com
+        type: string
+      password:
+        example: securePass123
+        type: string
+      username:
+        example: johndoe
+        type: string
+    type: object
+  handler.jsonResponse:
+    description: Standard response wrapper used by all endpoints.
+    properties:
+      data: {}
+      message:
+        example: ok
+        type: string
+    type: object
+  handler.registerJobRequest:
+    description: Payload for registering a new async job.
+    properties:
+      max_retries:
+        example: 5
+        type: integer
+      name:
+        example: welcome-email
+        type: string
+      timeout_seconds:
+        example: 30
+        type: integer
+      type:
+        example: email
+        type: string
+      version:
+        example: 1
+        type: integer
+      webhook_url:
+        example: http://webhook:9000/echo
+        type: string
+    type: object
+  handler.updateJobRequest:
+    description: Fields to update on an existing job. Only non-nil fields are applied.
+    properties:
+      max_retries:
+        example: 3
+        type: integer
+      name:
+        example: rebranded-email
+        type: string
+      timeout_seconds:
+        example: 60
+        type: integer
+      version:
+        example: 2
+        type: integer
+      webhook_url:
+        example: http://webhook:9000/echo
+        type: string
+    type: object
+host: localhost:8000
+info:
+  contact:
+    name: API Support
+    url: https://github.com/Heleo2705/assignment
+  description: Async job processing REST API with idempotent job creation, outbox
+    pattern, and JWT authentication.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: https://github.com/Heleo2705/assignment
+  title: Assignment API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Returns a simple OK response to confirm the API is running.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: API is healthy
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Health check
+      tags:
+      - system
+  /jobs:
+    get:
+      description: Returns a paginated list of jobs owned by the authenticated user,
+        newest first.
+      parameters:
+      - description: Page number (default 1)
+        in: query
+        minimum: 1
+        name: page
+        type: integer
+      - description: Items per page (default 20, max 100)
+        in: query
+        maximum: 100
+        minimum: 1
+        name: page_size
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Paginated list of jobs
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Missing or invalid Authorization header
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "500":
+          description: Server error
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: List user's jobs
+      tags:
+      - jobs
+    post:
+      consumes:
+      - application/json
+      description: Registers an async job to be processed. **Idempotent** — sending
+        the same payload twice returns the existing job with HTTP 200. The idempotency
+        hash is computed from canonical (sorted-key) JSON of all fields.
+      parameters:
+      - description: Job registration payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.registerJobRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Job already exists (idempotent match) — returns existing job_id
+            and state
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "202":
+          description: Job accepted for processing — returns job_id and state
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "400":
+          description: Invalid payload or missing required fields
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Missing or invalid Authorization header
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "500":
+          description: Server error
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Create a job
+      tags:
+      - jobs
+  /jobs/{jobID}:
+    delete:
+      description: Permanently removes a job owned by the authenticated user.
+      parameters:
+      - description: Job UUID
+        example: 550e8400-e29b-41d4-a716-446655440000
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Job deleted successfully
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Missing or invalid Authorization header
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "403":
+          description: Job belongs to another user
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "404":
+          description: Job not found
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "500":
+          description: Server error
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Delete a job
+      tags:
+      - jobs
+    get:
+      description: Returns full details of a specific job owned by the authenticated
+        user.
+      parameters:
+      - description: Job UUID
+        example: 550e8400-e29b-41d4-a716-446655440000
+        in: path
+        name: jobID
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Job details
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Missing or invalid Authorization header
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "403":
+          description: Job belongs to another user
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "404":
+          description: Job not found
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Get a job by ID
+      tags:
+      - jobs
+    put:
+      consumes:
+      - application/json
+      description: Partially updates an existing job. Only the fields included in
+        the request body are changed — omitted fields keep their current values.
+      parameters:
+      - description: Job UUID
+        example: 550e8400-e29b-41d4-a716-446655440000
+        in: path
+        name: jobID
+        required: true
+        type: string
+      - description: Fields to update (all optional — at least one required)
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.updateJobRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Job updated successfully
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "400":
+          description: Invalid payload or no fields to update
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Missing or invalid Authorization header
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "403":
+          description: Job belongs to another user
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "404":
+          description: Job not found
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "500":
+          description: Server error
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Update a job
+      tags:
+      - jobs
+  /login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates with email and password, returns JWT access and refresh
+        tokens.
+      parameters:
+      - description: Login credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.authRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login OK — includes user_id, access_token, refresh_token
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "400":
+          description: Invalid payload or missing fields
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "401":
+          description: Invalid email or password
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Authenticate a user
+      tags:
+      - auth
+  /register:
+    post:
+      consumes:
+      - application/json
+      description: Creates a user account with email and password, returns JWT access
+        and refresh tokens.
+      parameters:
+      - description: Registration credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handler.authRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: User created — includes user_id, access_token, refresh_token
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "400":
+          description: Invalid payload or missing fields
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+        "500":
+          description: Server error
+          schema:
+            $ref: '#/definitions/handler.jsonResponse'
+      summary: Register a new user
+      tags:
+      - auth
+securityDefinitions:
+  BearerAuth:
+    description: Enter "Bearer <token>" — get a token from POST /register or /login
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"
