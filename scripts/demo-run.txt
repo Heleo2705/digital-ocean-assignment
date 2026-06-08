@@ -1,4 +1,4 @@
-DEMO RUN 2026-06-08T07:41:30Z
+DEMO RUN 2026-06-08T09:12:22Z
 Host: http://168.144.156.101:8000
 
 === 1. Health ===
@@ -6,41 +6,89 @@ Host: http://168.144.156.101:8000
 
 === 2. Register ===
 {
-    "message": "failed to create user"
+    "message": "registration successful",
+    "data": {
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjZmU5ZDYyOC05YzA1LTQ4MzMtYmEwMS1jOWRjNzJmMjc5YTUiLCJleHAiOjE3ODA5MTA4NDIsImlhdCI6MTc4MDkwOTk0MiwiZW1haWwiOiJkZW1vMTc4MDkwOTk0MkB0ZXN0LmNvbSJ9.M6JKOgvjjiGB82sZNIwcCscrLba_YukHemrUZQnCl4c",
+        "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjZmU5ZDYyOC05YzA1LTQ4MzMtYmEwMS1jOWRjNzJmMjc5YTUiLCJleHAiOjE3ODE1MTQ3NDIsImlhdCI6MTc4MDkwOTk0Mn0.O-iebuaoN3p2hXCzSdzDBzxJWfDoTiJN7fEXe75a644",
+        "user_id": "cfe9d628-9c05-4833-ba01-c9dc72f279a5"
+    }
 }
 
 === 3. Create Job ===
+{
+    "message": "job registration accepted",
+    "data": {
+        "job_id": "7a12ff36-cbd7-4c58-a170-0a12bd765fa5",
+        "state": "pending"
+    }
+}
 
 === 4. Poll for completion ===
-[1s] state=
-[2s] state=
-[3s] state=
-[4s] state=
-[5s] state=
-[6s] state=
-[7s] state=
-[8s] state=
-[9s] state=
-[10s] state=
-[11s] state=
-[12s] state=
-[13s] state=
-[14s] state=
-[15s] state=
-[16s] state=
-[17s] state=
-[18s] state=
-[19s] state=
-[20s] state=
-[21s] state=
-[22s] state=
-[23s] state=
-[24s] state=
-[25s] state=
-[26s] state=
-[27s] state=
-[28s] state=
-[29s] state=
-[30s] state=
+[1s] state=pending
+[2s] state=pending
+[3s] state=pending
+[4s] state=pending
+[5s] state=running
+[6s] state=running
+[7s] state=running
+[8s] state=completed
+
+=== Final Job ===
+{
+    "message": "job fetched",
+    "data": {
+        "attempts": 1,
+        "id": "7a12ff36-cbd7-4c58-a170-0a12bd765fa5",
+        "last_error": "",
+        "max_retries": 5,
+        "name": "capture-demo",
+        "payload": {
+            "name": "capture-demo",
+            "type": "email",
+            "version": 1,
+            "max_retries": 5,
+            "webhook_url": "http://webhook:9000/echo",
+            "timeout_seconds": 15
+        },
+        "result": {
+            "status": "ok"
+        },
+        "scheduled_at": "2026-06-08T09:12:22.47794Z",
+        "state": "completed",
+        "timeout_seconds": 15,
+        "type": "email",
+        "version": 1,
+        "webhook_url": "http://webhook:9000/echo"
+    }
+}
 
 === 5. List Jobs ===
+{
+    "message": "jobs listed",
+    "data": [
+        {
+            "attempts": 1,
+            "id": "7a12ff36-cbd7-4c58-a170-0a12bd765fa5",
+            "last_error": "",
+            "max_retries": 5,
+            "name": "capture-demo",
+            "payload": {
+                "name": "capture-demo",
+                "type": "email",
+                "version": 1,
+                "max_retries": 5,
+                "webhook_url": "http://webhook:9000/echo",
+                "timeout_seconds": 15
+            },
+            "result": {
+                "status": "ok"
+            },
+            "scheduled_at": "2026-06-08T09:12:22.47794Z",
+            "state": "completed",
+            "timeout_seconds": 15,
+            "type": "email",
+            "version": 1,
+            "webhook_url": "http://webhook:9000/echo"
+        }
+    ]
+}
